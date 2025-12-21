@@ -34,7 +34,7 @@ find_package_handle_standard_args(
 # 设置环境变量
 if(MySQL_FOUND)
     set(MYSQL_INCLUDE_DIRS ${MYSQL_INCLUDE_DIR})
-    set(MYSQL_LIBRARIES) ${MYSQL_LIBRARY}
+    set(MYSQL_LIBRARIES ${MYSQL_LIBRARY})
 endif()
 
 # 标记为高级变量

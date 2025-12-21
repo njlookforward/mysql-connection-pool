@@ -12,9 +12,9 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 编译选项
-if(CMAKE_COMPLIER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_complier_options(-Wall -Wextra -Wpedantic)
+# 编译选项 这里有拼写错误：add_compile_options
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
 # 查找依赖
@@ -22,7 +22,7 @@ find_package(Threads REQUIRED)
 find_package(MySQL REQUIRED)    # ??? 我们自定义的查找模块
 
 # 添加include目录
-include_directories(${CMAKE_CUURENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # 创建库目标
 add_subdirectory(src)
