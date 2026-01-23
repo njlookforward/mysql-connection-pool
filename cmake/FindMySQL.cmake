@@ -27,9 +27,16 @@ find_library(MYSQL_LIBRARY
 # 处理找到的结果
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(
-    DEFAULT_MSG
-    MYSQL_LIBRARY MYSQL_INCLUDE_DIR
+    MySQL
+    REQUIRED_VARS MYSQL_LIBRARY MYSQL_INCLUDE_DIR
 )
+
+# find_package_handle_standard_args(
+#     MySQL
+#     DEFAULT_MSG MYSQL_LIBRARY MYSQL_INCLUDE_DIR
+# )
+# REQUIRED_VARS是3.17+之后推荐的新写法，显示指定必需变量，会检查需要的变量是否存在，如果失败，会显示标准错误信息
+# DEFAULT_MSG是旧写法
 
 # 设置环境变量
 if(MySQL_FOUND)

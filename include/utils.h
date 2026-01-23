@@ -189,7 +189,7 @@ inline std::string escapeMySQLString(const std::string &str)
         case '\r': escaped += "\\r"; break;     // 回车符
         case '\\': escaped += "\\\\"; break;    // 反斜杠
         case '\'': escaped += "\\'"; break;     // 单引号；最重要的
-        case '"': escaped += "\\\""; break;     // 双引号，这一行是为什么呢？
+        case '"': escaped += "\\\""; break;     // 双引号，这一行是为什么呢？在SQL字符串中\"与"是一样的，因此转义"虽然冗余，但是具有更好的兼容性
         case '\x1a': escaped += "\\Z"; break;   // Ctrl + Z
         case '\t': escaped += "\\t"; break;     // 制表符
         case '\b': escaped += "\\b"; break;     // 退格符

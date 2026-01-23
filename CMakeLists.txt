@@ -29,6 +29,9 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 # set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
 # set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
 
+# 设置默认生成的是动态库文件，在顶层CMakeLists.txt中进行全局设置，影响所有的add_library
+set(BUILD_SHARED_LIBS ON)
+
 # 创建库目标
 add_subdirectory(src)
 

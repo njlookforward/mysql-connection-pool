@@ -42,3 +42,6 @@
 
 build/
 .vscode/
+bin/
+lib/
+*.log
