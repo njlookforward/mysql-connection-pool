@@ -24,6 +24,11 @@ find_package(MySQL REQUIRED)    # ??? 我们自定义的查找模块
 # 添加include目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# 可以在顶层CMakeLists.txt中设置可执行程序、库文件的存储路径，这样的话，子CMakeLists.txt可以继承
+# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+# set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
+# set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
+
 # 创建库目标
 add_subdirectory(src)
 

@@ -135,7 +135,7 @@ bool waitForCondition(int timeoutMs)
 {
     auto start = std::chrono::steady_clock().now();
     // 定义为毫秒为单位的时间段
-    auto timeout = std::chrono::milliseconds(timeoutMs);
+    auto timeout = std::chrono::milliseconds(timeoutMs);    // 直接使用整数初始化milliseconds这个时间段duration
 
     while(!metCondition())
     {
@@ -163,6 +163,7 @@ inline std::string toString(const T& value)
 /**
  * @brief MySQL专用的字符串转义函数
  * 主要就是转义字符需要注意
+ * @param 这里的输入参数，就是我们写入的原始的mysql语句，但是不带''，然后进行转义
  */
 inline std::string escapeMySQLString(const std::string &str)
 {
