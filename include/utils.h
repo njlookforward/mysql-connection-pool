@@ -37,6 +37,9 @@ namespace Utils
 /**
  * @brief 生成指定长度的随机字符串
  * @bug 对于头文件中定义的函数，必须带有inline
+ * @return 随机生成的字符串（包含数字和字母）
+ * 
+ * 用途：生成连接ID、会话标识等
  */
 inline std::string generateRandomString(size_t length)
 {
@@ -52,7 +55,7 @@ inline std::string generateRandomString(size_t length)
     static thread_local std::uniform_int_distribution<size_t> dist { 0, sizeof(charset)-2 };
     // 这是均匀分布的随机数分布器
 
-    std:: string result;
+    std::string result;
     result.reserve(length);
 
     for(size_t i = 0; i < length; ++i)
@@ -89,6 +92,8 @@ inline std::string randomString(size_t length)
 
 /**
  * @brief 获取当前时间戳（毫秒）
+ * @return 自1970年1月1号以来的毫秒数
+ * 我理解：时间戳是一个时间段的表示方法，用一个时间段来表示一个时间点
  * 用途：记录连接创建时间、计算连接使用时长等
  */
 inline int64_t currentTimeMillis() {
@@ -99,6 +104,8 @@ inline int64_t currentTimeMillis() {
 
 /**
  * @brief 获取当前时间戳
+ * @return 自1970年1月1日以来的微秒数
+ * 
  * 用途：精确地性能测量
  * 
  * @question 什么时候使用system_clock，什么时候使用steady_clock
@@ -109,6 +116,18 @@ inline int64_t currentTimeMicros() {
     ).count();
 
 }
+
+/**
+ * @note system_clock and steady_clock的使用场景
+ * 1. 需要真实时间 ---> system_clock 可以被调整，时间值有实际意义，对应真实日期时间，可能向前或者向后跳变
+ *    1）获取时间戳
+ *    2）记录日志
+ *    3）显示给客户
+ * 2. 需要测量时间差 ---> steady_clock 单调递增，只能前进，不会后退，不受系统时间调整影响，保证时间上的连续性
+ *    1）性能测试
+ *    2）超时计算
+ *    3）速率限制
+ */
 
 // 判断是否超时
 #if 0
@@ -209,6 +228,11 @@ inline std::string formatBytes(uint64_t bytes)
     }
 
     std::ostringstream oss;
+    /**
+     * @note
+     * oss.precision(1) 这是设置浮点数精度为1位小数，但是精度含义取决于是否使用了fixed或scientific模式
+     * 默认情况下，是总的有效数字位数；但是使用fixed后，为小数点后的位数
+     */
     oss.precision(1);
     oss << std::fixed << size << " " << units[unit];
     return oss.str();
