@@ -10,7 +10,8 @@
  */
 void testMySQLEscape()
 {
-    std::cout << "\n=== 测试MySQL字符串转义 ===" << std::endl;
+    // @note 第一部分的测试使用===开始；内部的子部分的测试使用---开始，这样方便区分
+    std::cout << "\n--- 测试MySQL字符串转义 ---" << std::endl;
     // 将普通的mysql语句转换为MySQL的合格的输入语句，然后再按照C++的方式转义
 
     // 函数内部定义测试用例格式
@@ -104,7 +105,7 @@ void testLogger()
     std::cout << "\n=== 测试Logger日志系统 ===" << std::endl;
     Logger &logger = Logger::getInstance();
     // ###BUG 这里的相对路径应该相对的是工作目录
-    logger.init(LogLevel::DEBUG, "./docs/test_day1.log");
+    logger.setLevel(LogLevel::DEBUG);
 
     logger.debug("这是一条调试信息");
     logger.info("这是一条普通信息");
@@ -134,8 +135,11 @@ void testLogger()
 void testMultiThreadLogger()
 {
     std::cout << "\n=== 测试多线程日志系统的安全性，共5个线程，每个线程输出3条语句 ===" << std::endl;
-    Logger &logger = Logger::getInstance();
-    logger.init(LogLevel::INFO, "./docs/test_day1.log");
+    // Logger &logger = Logger::getInstance();
+    // 因为上面的testLogger函数已经完成了init初始化工作，因此这里的Init函数其实是没有任何作用的；
+    // ###BUG 因此对于logger的初始化工作，应该在main函数就应该完成，而不是在各个被调用的函数中完成
+    // 准确来说，logger的初始化工作，应该在预热阶段完成
+    // logger.init("./docs/test_day1.log");    
 
     std::vector<std::thread> threads;
     for(int i = 0; i < 5; ++i)
@@ -176,7 +180,8 @@ void testPerformance()
     std::cout << "生成10000个长度为16的随机字符串花费 " << elapse.count() << "us" << std::endl;
 
     // ###BUG 设计的不合理，的确路径应该是第一个参数，而不是日志级别，越需要自定义的越需要放在左边
-    Logger::getInstance().init(LogLevel::INFO, "./docs/test_day1.log");
+    // Logger::getInstance().init("./docs/test_day1.log");
+    Logger::getInstance().setToConsole(false);
     start = std::chrono::high_resolution_clock().now();
     for(int i = 0; i < 1000; ++i)
     {
@@ -197,6 +202,9 @@ int main()
     try
     {
         testUtils();
+
+        // 应该在主程序的一开始处就完成Logger的初始化操作,其中的相对路径相对的是开始执行程序的当前路径
+        Logger::getInstance().init("./docs/test_day1.log");
         testLogger();
         testMultiThreadLogger();
         testPerformance();

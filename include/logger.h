@@ -62,8 +62,9 @@ public:
      * 所以需要单独进行初始化设置日志级别，输出文件的路径，是否同时输出到控制台
      *
      * @note 只要是静态资源的设置或者访问，都应该加锁互斥访问，而且这里面应该采用双重判断
+     * @param 对于拥有默认参数的函数来说，越需要自己指定的参数，越要放在左面；越是固定的基本不变的参数，越要放在右边 ###
      */
-    void init(LogLevel level = LogLevel::INFO, const std::string &filename = "", bool toConsole = true)
+    void init(const std::string &filename = "", LogLevel level = LogLevel::INFO, bool toConsole = true)
     {
         // 判断m_initilized是否为true
         if (m_initialized)
@@ -179,6 +180,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_level = level;
+    }
+
+    /**
+     * @brief 更改是否输出到控制台
+     * @note 需要加锁线程安全地修改
+     */
+    void setToConsole(bool toConsole)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_toConsole = toConsole;
     }
 
     /**
