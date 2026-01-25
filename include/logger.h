@@ -206,7 +206,7 @@ public:
      * @brief 日志的数字到字符串的转换
      * 我认为这个函数也应该定义为public类型，万一之后会用到呢
      */
-    std::string levelToString(LogLevel level)
+    std::string levelToString(LogLevel level) const
     {
         // 如果可以使用switch的话，说明强枚举类型可以直接使用operator=运算符进行比较
         switch (level)
