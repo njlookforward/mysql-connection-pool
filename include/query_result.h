@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <stdexcept>
 #include <mysql/mysql.h>
+#include "logger.h"
 
 /**
  * @brief MySQL查询结果封装类
@@ -167,7 +169,7 @@ public:
      * @return 字段值
      * @throws std::out_of_range 字段名不存在
      */
-    long long getLong(unsigned int index) const;
+    long long getLong(const std::string &fieldName) const;
 
     /**
      * @brief 按照字段名得到字段值（double）
@@ -213,7 +215,7 @@ private:
      * @return index
      * @throws std::out_of_range 如果字段名不存在
      */
-    unsigned int getFieleIndex(const std::string &fieldName) const;
+    unsigned int getFieldIndex(const std::string &fieldName) const;
 
     /**
      * @brief 检查索引是否有效，是否超出范围
@@ -234,7 +236,7 @@ private:
      * @brief 将返回的字符串转换为正确的数据类型
      * @note ### MYSQL与Redis一样，返回的都是字符串值吗
      */
-#if 0
+#if 1
     int safeConvert(const char *value, int defaultValue) const;
     long long safeConvert(const char *value, long long defaultValue) const;
     double safeConvert(const char *value, double defaultValue) const;
@@ -253,12 +255,12 @@ private:
     MYSQL_ROW m_currentRow;                 // 当前行数据
     unsigned long *m_lengths;               // 当前行各字段的长度 --- 这个没有理解是什么意思，我猜测unsigned long lengths[]，这是当前行各字段长度的数组
     unsigned int m_fieldCount;              // 字段数量
-    unsigned long long m_rows;              // 行数，行数与受影响的行数，都需要使用unsigned long long，因为可能很长
+    unsigned long long m_rowCount;              // 行数，行数与受影响的行数，都需要使用unsigned long long，因为可能很长
     unsigned long long m_affectedRows;      // 受影响的行数
     std::vector<std::string> m_fieldNames;  // 字段名列表
 };
 
-// 类型别名，智能指针类型定义，推荐这样
+// 类型别名，智能指针类型定义
 using QueryResultPtr = std::shared_ptr<QueryResult>;
 
 #endif  // QUERY_RESULT_H
