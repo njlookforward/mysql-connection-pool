@@ -163,7 +163,9 @@ inline std::string toString(const T& value)
 /**
  * @brief MySQL专用的字符串转义函数
  * 主要就是转义字符需要注意
- * @param 这里的输入参数，就是我们写入的原始的mysql语句，但是不带''，然后进行转义
+ * @param 这里的输入参数，就是我们写入的原始的mysql语句中的字符串部分，但是不带''，然后进行转义
+ * 我需要明确一点：这里转义的是SQL语句中的字符串部分，不是整体，不是整体，整体需要使用mysql官方的API mysql_real_escape_string函数
+ * 这里转义的示例： SELECT * from users WHERE name = 'O'relly'; 这里的O'relly是这个函数要进行转义的字符串
  */
 inline std::string escapeMySQLString(const std::string &str)
 {

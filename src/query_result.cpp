@@ -116,7 +116,7 @@ void QueryResult::initializeMetaData()
     // fieldCount
     m_fieldCount = mysql_num_fields(m_result);
     // rowCount
-    m_rowCount = mysql_num_rowCount(m_result);
+    m_rowCount = mysql_num_rows(m_result);
 
     // 字段名称列表
     MYSQL_FIELD *fields = mysql_fetch_field(m_result); // 这得到的也是MYSQL_FIELD的数组
