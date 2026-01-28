@@ -34,10 +34,18 @@ struct DBConfig
     /**
      * @brief 便捷构造函数
      * @param 除了port and weight之外，其他的值必须给出
+     * 
+     * @bug ### 我没有在初始化列表中进行显示初始化，进行使用参数构造，所有的数据成员仍然都是默认值
      */
     DBConfig(const std::string &host, const std::string &user,
              const std::string &password, const std::string &database,
-             unsigned int port = 3306, unsigned int weight = 1) {}
+             unsigned int port = 3306, unsigned int weight = 1)
+             : host(host)
+             , user(user)
+             , password(password)
+             , database(database)
+             , port(port)
+             , weight(weight) {}
 
     /**
      * @brief 验证数据库配置是否有效

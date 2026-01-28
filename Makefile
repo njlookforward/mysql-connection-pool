@@ -9,4 +9,5 @@ clean:
 rebuild: clean all
 
 run: all
-	./bin/test_connection_pool
+	# ./bin/test_connection_pool
+	./bin/test_day2_connection

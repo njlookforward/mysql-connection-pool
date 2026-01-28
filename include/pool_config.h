@@ -168,7 +168,7 @@ struct PoolConfig
     /**
      * @brief 设置连接池大小 min max init
      */
-    void setConnectionLimits(unsigned int max, unsigned int min, unsigned init)
+    void setConnectionLimits(unsigned int min, unsigned int max, unsigned init)
     {
         // 我必须判断max与min是否满足要求，才能进行设置
         // 其实从数据类型的角度，输入参数肯定是>=0的，但是仍然需要检查不为0

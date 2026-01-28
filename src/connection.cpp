@@ -67,10 +67,12 @@ void Connection::init()
     }
 
     // 5. 设置字符集为utf8mb4，支持emoji等4字节字符
-    if (mysql_options(m_mysql, MYSQL_SET_CHARSET_NAME, "uft8mb4") != 0)
-    {
-        LOG_WARNING("Failed to set charset to utf8mb4");
-    }
+    // ### BUG 没有utf8mb4的字符集，只有utf8，即使改为utf8，也继续报错，没有修复好
+    // if (mysql_options(m_mysql, MYSQL_SET_CHARSET_NAME, "uft8") != 0)
+    // {
+    //     // LOG_WARNING("Failed to set charset to utf8mb4");
+    //     LOG_WARNING("Failed to set charset to utf8");
+    // }
 
     // 6. 设置可以同时执行多条语句
     // 大多数连接池场景不需要在单个调用中执行多条SQL语句，而且多语句功能存在SQL注入风险
@@ -92,7 +94,8 @@ void Connection::init()
 bool Connection::connect()
 {
     // 加锁
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     if (m_connected)
     {
@@ -143,7 +146,8 @@ bool Connection::connect()
  */
 void Connection::close()
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     if (m_mysql)
     {
@@ -162,7 +166,8 @@ void Connection::close()
  */
 bool Connection::isValid() const
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     if (!m_mysql)
     {
@@ -220,7 +225,8 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
         throw std::runtime_error("Connection not established [" + m_connectionId + "]");
     }
 
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 若有效
     // 记录日志：尝试进行什么操作
     LOG_DEBUG("Connection execute " + std::string(isQuery ? "query" : "update") +
@@ -269,7 +275,8 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
 bool Connection::beginTransaction()
 {
     // 加锁，保证多线程安全
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if(!m_mysql || !m_connected)
     {
@@ -299,7 +306,8 @@ bool Connection::beginTransaction()
 bool Connection::commit()
 {
     // 加锁
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if(!m_mysql || !m_connected)
     {
@@ -327,7 +335,8 @@ bool Connection::commit()
 bool Connection::rollback()
 {
     // 加锁
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if(!m_mysql || !m_connected)
     {
@@ -351,12 +360,19 @@ bool Connection::rollback()
 
 // =============================
 // 错误处理方法
+// ### BUG 在getLastError，getLastErrorCode，escapeString函数中，我自己使用了isValid代替直接判断
+// 连接是否有效，这导致了死锁的发生，所以我需要修改逻辑
+// 我先尝试使用递归锁解决问题，然后再修改逻辑
+// ### BUG 对于错误处理，我必须改变逻辑，单纯的将互斥锁修改为递归锁是不够的，因为isValid中调用了mysql_ping，这会清除mysql之前的错误状态，因此
+// 我打印出来的错误信息都是空的，因为mysql_ping没有错误，所以就不会有任何字符串显示
 // =============================
 
 std::string Connection::getLastError() const
 {
     // 进行任何与MySQL Server的通信，都需要先判断是否建立连接，然后再执行操作
-    if(!isValid())
+    // if(!isValid())
+    // ### 疑问：为什么仅仅查看m_mysql就能够判断连接是否建立，不要再查看m_connected吗？
+    if(!m_mysql || !m_connected)
     {
         return "MySQL connection not established!";
     }
@@ -368,7 +384,8 @@ std::string Connection::getLastError() const
 unsigned int Connection::getLastErrorCode() const
 {
     // 没有建立连接，直接返回0
-    if(!isValid())
+    // if(!isValid())
+    if(!m_mysql || !m_connected)
         return 0;
     // 有连接，调用API
     return mysql_errno(m_mysql);
@@ -384,7 +401,8 @@ std::string Connection::escapeString(const std::string &sql)
     // 我认为这个函数的功能仅仅是转义SQL语句，而不需要判断连接是否建立，但是写上也无所谓
     // ### 疑问：由于mysql_real_escape_string仍然需要传入连接句柄m_mysql，所以使用API进行转义的前提是需要建立MySQL连接 ### 疑问
     // 判断连接是否建立
-    if(!isValid())
+    // if(!isValid())
+    if(!m_mysql || !m_connected)
     {
         LOG_ERROR("Connection not established, can not escape string [" + m_connectionId + "]");
         // 返回的应该是转义后的SQL语句，因此这里无法返回，只能抛出异常
@@ -416,7 +434,8 @@ int64_t Connection::getCreationTime() const
 // ### BUG 我需要加锁锁定此时的最新活动时间
 int64_t Connection::getLastActiveTime() const
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
     return m_lastActiveTime;
 }
 

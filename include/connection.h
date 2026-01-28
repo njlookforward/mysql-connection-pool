@@ -225,7 +225,7 @@ private:
     std::string m_connectionId;         // 连接唯一标识符
     int64_t m_creationTime;             // 连接创建时间
     mutable int64_t m_lastActiveTime;   // 连接最后活动时间
-    mutable std::mutex m_mutex;         // 互斥锁，保证线程安全
+    mutable std::recursive_mutex m_mutex;         // 互斥锁，保证线程安全
     bool m_connected;                   // 是否已经建立连接
 };
 

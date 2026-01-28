@@ -230,6 +230,8 @@ std::string QueryResult::getString(unsigned int index) const
             m_result == nullptr ? "this is non-select operation, cannot getString"
                                 : "Please invoke next() before getString()");
     }
+
+    return "";  // 这仅仅用来消除warning，都则会返回non-void function
 }
 
 // 需要搞清楚checkRow的具体逻辑，才能知道需不需要判断m_currentRow的值
@@ -252,6 +254,8 @@ int QueryResult::getInt(unsigned int index) const
     {
         std::cerr << e.what() << '\n';
     }
+
+    return 0;
 }
 
 long long QueryResult::getLong(unsigned int index) const
@@ -286,6 +290,8 @@ double QueryResult::getDouble(unsigned int index) const
     {
         std::cerr << e.what() << '\n';
     }
+
+    return 0.0;
 }
 
 bool QueryResult::isNull(unsigned int index) const
