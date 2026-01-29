@@ -1,6 +1,9 @@
 #include "connection.h"
 #include "utils.h"
+#include "db_exception.h"
 #include <stdexcept>
+#include <thread>
+#include <random>
 
 /**
  * @brief 这是连接类的基础实现
@@ -12,20 +15,26 @@
 
 Connection::Connection(const std::string &host, const std::string &user,
                        const std::string &password, const std::string &database,
-                       unsigned int port)
-    : m_mysql(nullptr), m_host(host), m_user(user), m_password(password), m_database(database), m_port(port), m_connectionId(Utils::generateRandomString(16)), m_creationTime(Utils::currentTimeMillis()), m_lastActiveTime(m_creationTime), m_connected(false)
+                       unsigned int port,
+                       unsigned int reconnectInterval, unsigned int reconnectAttempts)
+    : m_mysql(nullptr), m_host(host), m_user(user), m_password(password), m_database(database), m_port(port), m_connectionId(Utils::generateRandomString(16)), m_creationTime(Utils::currentTimeMillis()), m_lastActiveTime(m_creationTime), m_connected(false), m_reconnectInterval(reconnectInterval), m_reconnectAttempts(reconnectAttempts), m_totalReconnectAttempts(0), m_successfulReconnects(0)
 {
-    LOG_INFO("Creating connection [" + m_connectionId + "] to " +
-             m_user + "@" + m_host + ":" + std::to_string(m_port) + "/" + m_database);
+    LOG_INFO("Creating enhanced connection [" + m_connectionId + "] to " +
+             m_user + "@" + m_host + ":" + std::to_string(m_port) + "/" + m_database +
+             ", reconnect config: interval=" + m_reconnectInterval +
+             "ms, attempts=" + m_reconnectAttempts);
     // 初始化连接对象
     init();
 }
 
+// 析构函数也需要更新，需要打印connection生命周期中的重连尝试信息
 Connection::~Connection()
 {
     close();
     m_connected = false;
-    LOG_INFO("destroy connection object [" + m_connectionId + "]");
+    LOG_INFO("Destroying connection object [" + m_connectionId + "], reconnect stats: " +
+             "totalReconnectAttempts=" + m_totalReconnectAttempts +
+             ", successful=" + m_successfulReconnects);
 }
 
 // =============================
@@ -107,8 +116,13 @@ bool Connection::connect()
     // 判断连接对象是否完成初始化
     if (!m_mysql)
     {
-        LOG_ERROR("MySQL connection object not initialized [" + m_connectionId + "]");
-        return false;
+        // 如果没有完成初始化，可以继续进行初始化，但如果仍然不成功，那只能返回错误
+        init();
+        if (!m_mysql)
+        {
+            LOG_ERROR("MySQL connection object failed to initialized [" + m_connectionId + "]");
+            return false;
+        }
     }
 
     // 开始尝试进行连接
@@ -127,7 +141,9 @@ bool Connection::connect()
     if (result == nullptr)
     {
         std::string error = getLastError();
-        LOG_ERROR("Failed to connect to MySQL Server: [" + m_connectionId + "]: " + error);
+        unsigned int errorCode = getLastErrorCode();
+        LOG_ERROR("Failed to connect to MySQL Server: [" + m_connectionId + "]: " + error +
+                  ", errorCode=" + errorCode);
         lock.unlock();
         return false;
     }
@@ -139,6 +155,98 @@ bool Connection::connect()
     LOG_INFO("Successfully to connect to MySQL Server: [" + m_connectionId + "]");
 
     return true;
+}
+
+/**
+ * @brief 尝试重连
+ * @return 重连是否成功
+ * 这个很有意思，就是在最大尝试次数范围内，不断地尝试重新建立连接，我需要详细地记录日志过程，而且需要能够判断那些是普通信息
+ * 哪些应该归为警告信息，哪些是错误信息，哪些是debug信息
+ *
+ * 重连就要重置所有的连接信息，因此连接句柄也要进行重置
+ */
+bool Connection::reconnect()
+{
+    // ### BUG 又忘记线程安全的事情了
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+
+    LOG_INFO("Connection object begin to attempt to reconnect [" + m_connectionId + "]");
+    // ### 这里忘记了，先关闭当前的连接
+    if (m_mysql)
+    {
+        mysql_close(m_mysql);
+        m_mysql = nullptr;
+        m_connected = false;
+    }
+
+    // 重新初始化连接句柄m_mysql
+    init();
+    if (!m_mysql)
+    {
+        LOG_ERROR("Reconnection failed to initialize connection [" + m_connectionId + "]");
+        return false;
+    }
+
+    // 在m_reconnectAttempts范围内不断地尝试进行mysql_real_connect
+    // 不要忘记更新总的重连次数和成功的重连次数
+    // 如果成功，还要更新最新的活动时间
+    // 先不要管记录日志，先把整体的重连逻辑梳理好，先实现一个最小可用版本
+    // 使用指数退避算法进行多次尝试
+    for (unsigned int attempt = 1; attempt <= m_reconnectAttempts; ++attempt)
+    {
+        MYSQL *result = mysql_real_connect(
+            m_mysql,
+            m_host.c_str(),
+            m_user.c_str(),
+            m_password.c_str(),
+            m_database.c_str(),
+            m_port,
+            nullptr,
+            0);
+
+        // 增加总的重连尝试次数
+        ++m_totalReconnectAttempts;
+
+        // 成功
+        if (result)
+        {
+            // ### 我忘记了更新连接的最新活动时间
+            updateLastActiveTime();
+            ++m_successfulReconnects;
+            // 不要忘记是否建立连接这个值的变化
+            m_connected = true;
+            LOG_INFO("Success to reconnect [" + m_connectionId + "] at " + std::to_string(attempt) +
+                     "/" + std::to_string(m_reconnectAttempts));
+            return true;
+        }
+        else
+        {
+            // 打印错误日志，需要添加错误信息和错误码
+            std::string error = mysql_error(m_mysql);
+            unsigned int errCode = mysql_errno(m_mysql);
+            LOG_ERROR("Failed to reconnect [" + m_connectionId + "] at " + std::to_string(attempt) +
+                      "/" + std::to_string(m_reconnectAttempts) + ": " + error + " (errorCode: " + std::to_string(errCode) + ")");
+            // 然后计算重连延迟时间，只有在不是最后一次重连机会的时候，进行延迟重连的操作才有意义
+            if (attempt < m_reconnectAttempts)
+            {
+                // 随着重连尝试次数的增加，延长时间也在增加
+                auto delay = calculateReconnectDelay(attempt);
+                // 需要记录，### BUG 这里是字符串，需要将delay转换成字符串格式
+                LOG_INFO("waiting " + std::to_string(delay) + "ms to continue next reconnection attempt [" + m_connectionId + "]");
+                // 解锁
+                lock.unlock();
+                // 等待 ### BUG 这里有问题，需要指出睡眠时间的单位
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+                // 加锁继续下一次的重连
+                lock.lock();
+            }
+        }
+    }
+
+    // 使用了所有的重连尝试次数，那么只能报错返回
+    LOG_WARNING("Failed to reconnect [" + m_connectionId + "] with all attempt chances.");
+    return false;
 }
 
 /**
@@ -164,11 +272,12 @@ void Connection::close()
  *
  * 使用mysql_ping来验证连接是否有效
  */
-bool Connection::isValid() const
+bool Connection::isValid(bool tryReconnect)
 {
     // std::unique_lock<std::mutex> lock(m_mutex);
     std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
+    // 因为是在建立连接的前提下，检测当前的连接是否有效，因此进行是否初始化判断和是有已经连接的判断
     if (!m_mysql)
     {
         // 对于一些不影响程序的逻辑错误，只需要添加警告日志即可
@@ -189,44 +298,65 @@ bool Connection::isValid() const
     }
     else
     {
+        // 因此有重连因素的考虑，所以需要知道错误码和错误信息
+        unsigned int errCode = mysql_errno(m_mysql);
+        std::string error = mysql_error(m_mysql);
         // 任何mysql操作失败后，都应该打印getLastError()
-        LOG_ERROR("Connection validation failed [" + m_connectionId + "]: " + getLastError());
-        return false;
+        LOG_WARNING("Connection validation failed [" + m_connectionId + "]: " + error);
+        // 需要判断是否需要进行重连或者不是连接错误
+        if (!tryReconnect || !isConnectionError(errCode))
+        {
+            return false;
+        }
     }
+
+    LOG_INFO("Although connection validation failed, but attempt to reconnect [" + m_connectionId + "]");
+    // ### BUG 这里又有一个大大的BUG，进入reconnect之前，需要解锁，否则一定死锁
+    lock.unlock();
+    return reconnect();
 }
 
 // =============================
 // 查询执行方法
 // @note 每次连接对象只有一个，但是可能被多个线程使用，因此必须加锁保证线程安全
+// day3: 带重连的查询执行方法，使用executeWithReconnect作为query and update的通义接口
+// @note 只要涉及到连接的操作，就必须通过加锁保证多线程安全
 // =============================
 QueryResultPtr Connection::executeQuery(const std::string &sql)
 {
     // 调用内部实现的方法，应该是统一进行select and non-select操作
-    return executeInternal(sql, true);
+    // return executeInternal(sql, true);
+    return executeWithReconnect(sql, true);
 }
 
 unsigned long long Connection::executeUpdate(const std::string &sql)
 {
-    QueryResultPtr result = executeInternal(sql, false);
+    // QueryResultPtr result = executeInternal(sql, false);
+    QueryResult result = executeWithReconnect(sql, false);
     return result ? result->getAffectedRows() : 0;
 }
-
 
 QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
 {
     // 之所以不能使用isValid()检验连接是否有效，是因为不能加两次锁，
     // 但是我可以先判断是否有效；然后再加锁进行后续的操作
     // 判断连接是否有效
-    if (!isValid())
-    {
-        // 日志记录规范：发生的事件 + [connectionId] + error
-        LOG_ERROR("Connection not established [" + m_connectionId + "]");
-        // 因为需要返回具体的结果，但是因为发生了错误，无法返回，只能抛出异常
-        throw std::runtime_error("Connection not established [" + m_connectionId + "]");
-    }
+    // ### BUG 我还是按照原来的写法，自己判断是否有连接而不是调用isValid函数
+    // if (!isValid())
+    // {
+    //     // 日志记录规范：发生的事件 + [connectionId] + error
+    //     LOG_ERROR("Connection not established [" + m_connectionId + "]");
+    //     // 因为需要返回具体的结果，但是因为发生了错误，无法返回，只能抛出异常
+    //     throw std::runtime_error("Connection not established [" + m_connectionId + "]");
+    // }
 
     // std::unique_lock<std::mutex> lock(m_mutex);
     std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    if (!m_mysql || !m_connected)
+    {
+        throw db::SQLExecutionError("Connection not established", CR_SERVER_GONE_ERROR);
+    }
+
     // 若有效
     // 记录日志：尝试进行什么操作
     LOG_DEBUG("Connection execute " + std::string(isQuery ? "query" : "update") +
@@ -238,47 +368,121 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
     // 无论是query or update 是不是都采用一个mysql_query的接口 ### 疑问
     if (mysql_query(m_mysql, sql.c_str()) != 0)
     {
-        std::string error = getLastError();
+        unsigned int errorCode = mysql_errno(m_mysql);
+        std::string error = mysql_error(m_mysql);
         LOG_ERROR("connection failed to execute " + std::string(isQuery ? "query" : "update") +
-                 " [" + m_connectionId + "]: " + error + ", SQL: " + sql);
-        throw std::runtime_error("SQL execution failed: " + error);
+                  " [" + m_connectionId + "]: " + error + ", SQL: " + sql);
+        throw db::SQLExecutionError("SQL execution failed: " + error, errorCode);
     }
     // 如果发生错误，进行错误处理
     // 执行成功
     // 如果为查询操作，需要返回查询结果
-    
-    if(isQuery)
+
+    if (isQuery)
     {
         // 处理查询，才需要处理结果集
         MYSQL_RES *result = mysql_store_result(m_mysql);
         // 判断是否有结果集，为什么这样判断呢？
-        if(!result && mysql_field_count(m_mysql) > 0)    // ### 这里命名result为空指针，为什么mysql_field_count还能够有结果呢？因为传入的是m_mysql，这里是不是要验证数据表不是空表，表是由多个域组成的
+        if (!result && mysql_field_count(m_mysql) > 0) // ### 这里命名result为空指针，为什么mysql_field_count还能够有结果呢？因为传入的是m_mysql，这里是不是要验证数据表不是空表，表是由多个域组成的
         {
-            std::string error = getLastError();
+            unsigned int errorCode = mysql_errno(m_mysql);
+            std::string error = mysql_error(m_mysql);
             LOG_ERROR("Failed to store query result [" + m_connectionId + "]: " + error);
-            throw std::runtime_error("Failed to store query result [" + m_connectionId + "]: " + error);
+            throw db::SQLExecutionError("Failed to store query result [" + m_connectionId + "]: " + error);
         }
 
         return std::make_shared<QueryResult>(result);
-    } else {
+    }
+    else
+    {
         // 对于更新操作，返回受影响的行数
         unsigned long long affects = mysql_affected_rows(m_mysql);
         return std::make_shared<QueryResult>(nullptr, affects);
     }
 }
 
+QueryResult Connection::executeWithReconnect(const std::string &sql, bool isQuery)
+{
+    // 加锁，保证多线程安全
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    // 日志记录
+    LOG_DEBUG("trying to execute " + std::string(isQuery ? "query" : "update") + "[" + m_connectionId + "]");
+    unsigned int errorCode = 0; // 准备好错误码
+    std::string errorMsg;
+    // 循环执行SQL命令
+    for (unsigned int attempt = 0; attempt <= m_reconnectAttempts; ++attempt)
+    {
+        // 开始正式执行SQL语句之前，先重连
+        if (attempt > 0)
+        {
+            // 日志记录，我的日志记录是很不完整的，需要继续学习
+            LOG_WARNING("Retrying " + std::string(isQuery ? "query" : "update") +
+                        "execution after reconnection, attempt " + std::to_string(attempt) +
+                        " [" + m_connectionId + "]");
+            // 开始重连
+            if (!reconnect())
+            {
+                // 如果重连失败，设置错误码和错误信息，然后继续下一次尝试进行重连
+                errorCode = CR_SERVER_GONE_ERROR;
+                errorMsg = "Failed to reconnect";
+
+                LOG_WARNING("Failed to reconnect for " + std::string(isQuery ? "query" : "update" + " execution [" + m_connectionId + "]: " + errorMsg));
+                continue;
+            }
+        }
+
+        try
+        {
+            // 调用executeInternal真正执行SQL语句
+            auto result = executeInternal(sql, isQuery);
+            // 更新最新的活动时间
+            updateLastActiveTime();
+            return result;
+        }
+        catch (const db::SQLExecutionError &e)
+        {
+            // 我已经自定义了SQL查询的异常类，为什么还要使用API呢，要使用我自己定义的接口
+            errorCode = e.getErrorCode();
+            // 仍然要使用我自己定义的接口
+            errorMsg = e.what();
+
+            // 判断是否是连接错误，如果不是的，继续抛出
+            if (isConnectionError(errorCode))
+            {
+                LOG_WARNING("Trying reconnect to execute " + std::string(isQuery ? "query" : "update") +
+                            " [" + m_connectionId + "]: " + errorMsg);
+                continue;
+            }
+            else
+            {
+                throw; // 这里仅仅写throw，是将收到的上一个异常重新抛出吗？ ###疑问
+            }
+        }
+    }
+
+    std::string error = "Fail to execute " + std::string(isQuery ? "query" : "update") +
+                        " with " + std::to_string(m_reconnectAttempts + 1) + "attempts [" +
+                        m_connectionId + "]: " + errorMsg;
+    LOG_ERROR(error);
+
+    throw std::runtime_error(error);
+}
+
 // =============================
 // 事务管理方法
 // 无论是开始事务、提交事务、回滚事务，整体的逻辑是一样的，只是进行事务的不同阶段而已
+// 增强版的事务管理方法，需要使用executeWithReconnect，在执行查询操作的过程中，如果需要重连的话就应该先进行重连，然后再执行事务的提交操作
+// 这是与之前的事务管理不同的地方
 // =============================
 
-bool Connection::beginTransaction()
+/* bool Connection::beginTransaction()
 {
     // 加锁，保证多线程安全
     // std::unique_lock<std::mutex> lock(m_mutex);
     std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
     {
         LOG_ERROR("Connection not established [" + m_connectionId + "]");
         // throw std::runtime_error("Connection not established [" + m_connectionId + "]");
@@ -288,7 +492,7 @@ bool Connection::beginTransaction()
     // 日志记录开始事务的事件
     LOG_DEBUG("start transaction [" + m_connectionId + "]");
     // 执行命令 ### 注意好像无论执行什么命令，都是mysql_query这一个函数
-    if(mysql_query(m_mysql, "START TRANSACTION") != 0)
+    // if (mysql_query(m_mysql, "START TRANSACTION") != 0)
     {
         // 错误处理
         std::string error = "Failed to begin transaction [" + m_connectionId + "]: " + getLastError();
@@ -300,16 +504,44 @@ bool Connection::beginTransaction()
     updateLastActiveTime();
     // 返回
     return true;
+} */
+
+bool Connection::beginTransaction()
+{
+    // ###BUG 这里没有考虑很清楚，executeWithReconnect函数体中首先就是加锁，我当前使用的是递归锁，也就是可重入锁，所以没有什么问题
+    // 但是需要加锁的临界区就是executeWithReconnect这一个函数，所以从性能角度来看，不需要加锁的
+    // std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    LOG_DEBUG("Begin transaction [" + m_connectionId + "]");
+    // 在try-catch中执行executeWithReconnect函数
+    try
+    {
+        // 执行成功
+        auto result = executeWithReconnect("START TRANSACTION", false);
+        // 对于返回的结果应该转为void，防止编译器警告
+        (void)reuslt;
+        updateLastActiveTime();
+
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        // 执行失败
+        LOG_ERROR("Failed to begin transaction [" + m_connectionId +
+                  "]: " + e.what());
+
+        return false;
+    }
 }
 
 // 待执行的SQL命令入队之后，就需要提交事务，说明需要让MySQL执行所有提交的命令，以及返回是否成功执行事务的标志
-bool Connection::commit()
+/* bool Connection::commit()
 {
     // 加锁
     // std::unique_lock<std::mutex> lock(m_mutex);
     std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
     {
         LOG_ERROR("Connection not established! [" + m_connectionId + "]");
         return false;
@@ -317,45 +549,90 @@ bool Connection::commit()
     // 日志记录事件
     LOG_DEBUG("commit transaction [" + m_connectionId + "]");
     // 执行命令
-    if(mysql_query(m_mysql, "COMMIT") != 0)
+    if (mysql_query(m_mysql, "COMMIT") != 0)
     {
         // 错误处理
         std::string error = "Failed to commit transaction [" + m_connectionId + "]: " + getLastError();
         LOG_ERROR(error);
-        return false;   
+        return false;
     }
-    
+
     // 更新连接最新活动时间
     updateLastActiveTime();
     // 返回
     return true;
+} */
+
+bool Connection::commit()
+{
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    LOG_DEBUG("Commit transaction [" + m_connectionId + "]");
+
+    // 执行带reconnect的操作
+    try
+    {
+        // 成功
+        auto result = executeWithReconnect("COMMIT", false);
+        (void)result;
+
+        updateLastActiveTime();
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        // 失败
+        // 日志记录
+        LOG_ERROR("Failed to commit transaction [" + m_connectionId + "]");
+        return false;
+    }
 }
 
 // 如果提交事务失败后，需要进行事务的回滚，是不是在MySQL中事务具有原子性，要么全部执行成功，如果有一个失败，就需要回滚；就是要么执行成功，要么回到最初的模样
-bool Connection::rollback()
+/* bool Connection::rollback()
 {
     // 加锁
     // std::unique_lock<std::mutex> lock(m_mutex);
     std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
     {
         LOG_ERROR("Connection not eatablished [" + m_connectionId + "]");
     }
     // 记录事件
     LOG_DEBUG("roll back transaction [" + m_connectionId + "]");
     // 开始执行事务回滚
-    if(mysql_query(m_mysql, "ROLLBACK") != 0)
+    if (mysql_query(m_mysql, "ROLLBACK") != 0)
     {
         // 错误处理
         LOG_ERROR("Failed to rollback [" + m_connectionId + "]: " + getLastError());
         return false;
     }
-    
+
     // 更新连接的最新活动时间
     updateLastActiveTime();
     // 返回
     return true;
+} */
+
+bool Connection::rollback()
+{
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    LOG_DEBUG("Roll back transaction [" + m_connectionId + "]");
+
+    try
+    {
+        auto result = executeWithReconnect("ROLLBACK TRANSACTION", false);
+        (void)result;
+
+        updateLastActiveTime();
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Failed to rollback transaction [" + m_connectionId + "]");
+
+        return false;
+    }
 }
 
 // =============================
@@ -367,28 +644,70 @@ bool Connection::rollback()
 // 我打印出来的错误信息都是空的，因为mysql_ping没有错误，所以就不会有任何字符串显示
 // =============================
 
-std::string Connection::getLastError() const
+// 在增强版带reconnect的版本中，不需要getLastError和getLastErrorCode两个函数
+/* std::string Connection::getLastError() const
 {
     // 进行任何与MySQL Server的通信，都需要先判断是否建立连接，然后再执行操作
     // if(!isValid())
     // ### 疑问：为什么仅仅查看m_mysql就能够判断连接是否建立，不要再查看m_connected吗？
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
     {
         return "MySQL connection not established!";
     }
 
     // 有连接，直接返回上次mysql操作后记录的错误信息
     return mysql_error(m_mysql);
-}
+} */
 
-unsigned int Connection::getLastErrorCode() const
+/* unsigned int Connection::getLastErrorCode() const
 {
     // 没有建立连接，直接返回0
     // if(!isValid())
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
         return 0;
     // 有连接，调用API
     return mysql_errno(m_mysql);
+} */
+
+bool Connection::isConnectionError(unsigned int errorCode)
+{
+    // MySQL连接相关错误代码
+    switch (errorCode)
+    {
+    // 服务器已经关闭连接
+    case 2006: // CR_SERVER_GONE_ERROR
+        LOG_DEBUG("Detected SERVER_GONE_ERROR [" + m_connectionId + "]");
+        return true;
+
+    // 服务器连接断开
+    case 2013: // CR_SERVER_LOST
+        LOG_DEBUG("Detected SERVER_LOST [" + m_connectionId + "]");
+        return true;
+
+    // 连接失败
+    case 2003: // CR_CONN_HOST_ERROR
+        LOG_DEBUG("Detected CONN_HOST_ERROR [" + m_connectionId + "]");
+        return true;
+
+    // 无法连接到MySQL服务器
+    case 2002: // CR_CONNECTION_ERROR
+        LOG_DEBUG("Detected CONNECTION_ERROR [" + m_connectionId + "]");
+        return true;
+
+    // 丢失与MySQL服务器的连接（扩展版）
+    case 2055: // CR_SERVER_LOST_EXTENDED
+        LOG_DEBUG("Detected SERVER_LOST_EXTENDED [" + m_connectionId + "]");
+        return true;
+
+    // 读取通信数据包时出错
+    case 2027: // CR_MALFORMED_PACKET
+        LOG_DEBUG("Detected MALFORMED_PACKET [" + m_connectionId + "]");
+        return true;
+
+    default:
+        LOG_DEBUG("Error Code " + std::to_string(errorCode) + " is not an connection error [" + m_connectionId + "]");
+        return false;
+    }
 }
 
 // =============================
@@ -397,12 +716,12 @@ unsigned int Connection::getLastErrorCode() const
 std::string Connection::escapeString(const std::string &sql)
 {
     // ### 我需要确定的一点是：对于SQL中的字符串我需要进行转义，而且这些字符串需要使用单引号包围起来，整个SQL语句是字符串形式，这两个字符串是不一样的意思的，我需要分清楚
-    
+
     // 我认为这个函数的功能仅仅是转义SQL语句，而不需要判断连接是否建立，但是写上也无所谓
     // ### 疑问：由于mysql_real_escape_string仍然需要传入连接句柄m_mysql，所以使用API进行转义的前提是需要建立MySQL连接 ### 疑问
     // 判断连接是否建立
     // if(!isValid())
-    if(!m_mysql || !m_connected)
+    if (!m_mysql || !m_connected)
     {
         LOG_ERROR("Connection not established, can not escape string [" + m_connectionId + "]");
         // 返回的应该是转义后的SQL语句，因此这里无法返回，只能抛出异常
@@ -410,14 +729,14 @@ std::string Connection::escapeString(const std::string &sql)
     }
     // 提前分配足够大的缓冲区，这里使用的是vector而不是string，需要思考为什么这样做
     // 因为我需要得到容器底层的数组指针，然后进行赋值，但是string.c_str返回的是const char*无法进行赋值操作，但是vector<char>.data()可以得到char*，这样就可以直接赋值
-    std::vector<char> escaped(sql.size() + 1);  // 按照C风格字符串数组进行分配
+    std::vector<char> escaped(sql.size() + 1); // 按照C风格字符串数组进行分配
     // 调用mysql官方的转义函数
     // ### 必须要进行错误处理，需要进行错误处理吗？如果需要的话，应该如何做错误处理？
     uint64_t escaped_length = mysql_real_escape_string(m_mysql,
                                                        escaped.data(),
                                                        sql.c_str(),
-                                                       sql.length());   // 原始的SQL字符串的长度
-    
+                                                       sql.length()); // 原始的SQL字符串的长度
+
     // 返回转义后的字符串，需要自己进行构造
     return std::string(escaped.data(), escaped_length);
 }
@@ -451,4 +770,52 @@ void Connection::updateLastActiveTime() const
 std::string Connection::getConnectionId() const
 {
     return m_connectionId;
+}
+
+// =============================
+// day3：新增重连统计方法
+// =============================
+
+unsigned int Connection::getTotalReconnectAttempts() const
+{
+    // 加锁，返回重连总的次数
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    return m_totalReconnectAttempts;
+}
+
+unsigned int Connection::getSuccessfulReconnects() const
+{
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    return m_successfulReconnects;
+}
+
+void Connection::resetReconnectStatus()
+{
+    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    m_totalReconnectAttempts = 0;
+    m_successfulReconnects = 0;
+    LOG_DEBUG("Reconnection statistics reset [" + m_connectionId + "]");
+}
+unsigned int Connection::calculateReconnectDelay(unsigned int attempt) const
+{
+    // 根据指数退避算法计算标准延迟时间
+    unsigned int baseDelay = m_reconnectInterval;   // 延迟时间的根
+    // 标准延迟时间不能无限大，因此需要有上限
+    static const maxDelay = 30000;  // 30秒是最长延迟时间
+    unsigned int standardDelay = baseDelay * (1 << (attempt - 1));  // 0就是2^0; 1就是2^1
+    standardDelay = std::min(maxDelay, standardDelay);  // 说明最大就是30秒
+
+    // 定义局部静态变量，而且是thread_local类型
+    // 这是更安全的随机抖动计算，避免惊群效应
+    static thread_local std::mt19937 rng { std::random_device{}() };
+    static thread_local std::uniform_real_distribution<double> dist { 0.8, 1.2 };   // 变化范围为80%-120%
+
+    // 计算抖动的概率[0.8, 1,2] jittered
+    double jitteredDelay = standardDelay * dist(rng);
+    unsigned int delay = static_cast<unsigned int>(std::max(1.0, jitteredDelay));    // 最小延长时间要有1ms
+    // 得到该尝试次数的延迟时间，并日志记录
+    LOG_INFO("Calculate reconnect delay " + std::to_string(delay) + "ms for Attempt " + std::to_string(attempt)
+            + " [" + m_connectionId + "]");
+
+    return delay;
 }

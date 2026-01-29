@@ -17,15 +17,27 @@
  * 
  * 注意：这是第2天的基础版本，后续会添加重连功能
  */
+/**
+ * @brief 第三天：增强版数据库连接类，支持自动重连
+ * 
+ * 第3天新增功能：
+ * 1. 智能错误识别：区分连接错误和业务错误
+ * 2. 自定义重连逻辑：支持多次重试和指数退避
+ * 3. 连接状态监控：实时监控连接健康状态
+ * 4. 带重连的查询执行：查询失败时自动重连重试
+ */
 class Connection
 {
 public:
     /**
      * @brief 构造函数，使用给定参数进行初始化，创建连接
+     * 新增重连间隔和最大重连尝试次数
      */
     Connection(const std::string &host, const std::string &user,
                const std::string &password, const std::string &database,
-               unsigned int port = 3306);
+               unsigned int port = 3306,
+               unsigned int reconnectInterval = 1000,
+               unsigned int reconnectAttempts = 3);
      
     /**
      * @brief 析构函数
@@ -64,6 +76,18 @@ public:
     bool connect();
     
     /**
+     * @brief 使用自定义重连逻辑尝试重新连接
+     * @return 是否成功重连
+     * 
+     * 重连特点：
+     * 1. 支持多次重试
+     * 2. 使用指数退避算法
+     * 3. 详细的日志记录
+     * 4. 线程安全
+     */
+    bool reconnect();
+
+    /**
      * @brief 关闭数据库连接
      * 通常不需要手动调用，析构函数会自动调用
      */
@@ -71,19 +95,29 @@ public:
 
     /**
      * @brief 检查连接是否有效
+     * @param tryReconnect 如果连接无效是否进行重连
      * @return 返回连接是否有效且可用
      * 因为需要更新最新的活动时间，因此不能设置为const
+     * @todo 到底要不要定义为const成员函数，TODO 需要继续看
+     * 不能定义为const成员函数，因为如果可以尝试重连，那么很多的数据成员都会被修改，因此不能
      */
-    bool isValid() const;
+    bool isValid(bool tryReconnect = false);
 
     // =============================
     // 查询执行方法
+    // day3 增强的查询执行方法
     // =============================
 
     /**
-     * @brief 执行SELECT查询语句
+     * @brief 执行SELECT查询语句（带自动重连）
      * @return 查询结果的智能指针
-     * @throws std::runtime_error，如果查询失败
+     * @throws std::runtime_error，如果查询失败且无法重连
+     * 
+     * 执行流程：
+     * 1. 执行查询操作
+     * 2. 如果失败，且是连接错误，多次进行重连
+     * 3. 重连成功后继续执行查询操作
+     * 4. 如果多次重试失败后，抛出异常
      * 
      * 使用示例：
      * auto reuslt = conn.executeQuery("SELECT * FROM users WHERE age > 18");
@@ -95,10 +129,16 @@ public:
     QueryResultPtr executeQuery(const std::string &sql);
 
     /**
-     * @brief 执行更新操作（INSERT/DELETE/UPDATE)
+     * @brief 执行更新操作（INSERT/DELETE/UPDATE)，带自动重连
      * @param sql语句
      * @return affectedRows受影响的行数
-     * @throws std::runtime_error 如果执行失败
+     * @throws std::runtime_error 如果执行失败且无法重连
+     * 
+     * 执行逻辑，与查询操作是一样的
+     * 1. 执行更新操作（INSERT/UPDATE/DELETE)
+     * 2. 如果失败且是连接错误，尝试重连
+     * 3. 重连成功后继续执行更新操作
+     * 4. 多次尝试失败后，抛出异常
      * 
      * 使用示例
      * auto affected = conn.executeUpdate("UPDATE users SET statu = 1 WHERE name = 'tom'")
@@ -109,6 +149,7 @@ public:
 
     // =============================
     // 事务管理方法 ### 重点
+    // day3 事务管理方法（增强版）
     // =============================
     
     /**
@@ -157,6 +198,22 @@ public:
      */
     unsigned int getLastErrorCode() const;
 
+    // day3 新增方法，为什么要将上面的得到错误信息和错误码进行注释呢？我认为不应该注释掉
+    /**
+     * @brief 检查是否是连接断开错误
+     * @param errorCode 错误代码
+     * @return 是否是连接断开错误
+     * 
+     * 支持的MySQL连接断开错误码
+     * - 2002: CR_CONNECTION_ERROR  无法连接到MySQL服务器
+     * - 2003: CR_CONN_HOST_ERROR   无法连接到指定主机
+     * - 2006: CR_SERVER_GONE_ERROR MySQL服务器已经关闭连接
+     * - 2013: CR_SERVER_LOST       ## 很奇怪：查询过程中与服务器连接丢失
+     * - 2027：CR_MALFORMED_PACKET  收到格式错误的数据包
+     * - 2055：CR_SERVER_LOST_EXTENDED  扩展的服务器连接丢失
+     */
+    bool isConnectionError(unsigned int errorCode) const;
+
     // =============================
     // 工具方法
     // =============================
@@ -193,6 +250,25 @@ public:
      */
     std::string getConnectionId() const;
 
+    // =============================
+    // day3：新增重连统计方法
+    // =============================
+
+    /**
+     * @brief 获取总的重连尝试次数
+     */
+    unsigned int getTotalReconnectAttempts() const;
+
+    /**
+     * @brief 获取成功重连的次数
+     */
+    unsigned int getSuccessfulReconnects() const;
+
+    /**
+     * @brief 重置重连统计
+     */
+    void resetReconnectStatus();
+
 private:
     // =============================
     // 私有方法
@@ -205,12 +281,32 @@ private:
     void init();
 
     /**
+     * @brief 执行查询操作的内部方法，带有重连逻辑
+     * @param SQL语句
+     * @param isQuery 是否是查询操作
+     * @return SQL操作结果的智能指针
+     * 
+     * 这是第3天的核心新功能
+     * 1. 自动识别连接错误
+     * 2. 智能重连机制
+     * 3. 重连逻辑
+     */
+    QueryResult executeWithReconnect(const std::string &sql, bool isQuery);
+
+    /**
      * @brief 执行SQL语句的内部方法 ### 疑问：这是什么意思，什么SQL语句的内部方法
      * @param SQL语句
      * @param 是否是查询操作
      * @return 查询结果的智能指针
      */
     QueryResultPtr executeInternal(const std::string &sql, bool isQuery);
+
+    /**
+     * @brief 计算重连的延迟时间（指数退避算法）
+     * @param attempt 重连次数（从1开始）
+     * @return 延迟时间（毫秒）
+     */
+    unsigned int calculateReconnectDelay(unsigned int attempt) const;
 
 private:
     // =============================
@@ -227,6 +323,19 @@ private:
     mutable int64_t m_lastActiveTime;   // 连接最后活动时间
     mutable std::recursive_mutex m_mutex;         // 互斥锁，保证线程安全
     bool m_connected;                   // 是否已经建立连接
+    
+    // =============================
+    // 新增的重连相关参数
+    // =============================
+    unsigned int m_reconnectInterval;  // 重连间隔（毫秒）
+    unsigned int m_reconnectAttempts;   // 最大重连尝试次数
+
+    // =============================
+    // 重连统计
+    // =============================
+    unsigned int m_totalReconnectAttempts;  // 总的重连尝试次数
+    unsigned int m_successfulReconnects;    // 成功的重连次数
+
 };
 
 // 智能指针类型别名
