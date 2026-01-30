@@ -19,10 +19,11 @@ Connection::Connection(const std::string &host, const std::string &user,
                        unsigned int reconnectInterval, unsigned int reconnectAttempts)
     : m_mysql(nullptr), m_host(host), m_user(user), m_password(password), m_database(database), m_port(port), m_connectionId(Utils::generateRandomString(16)), m_creationTime(Utils::currentTimeMillis()), m_lastActiveTime(m_creationTime), m_connected(false), m_reconnectInterval(reconnectInterval), m_reconnectAttempts(reconnectAttempts), m_totalReconnectAttempts(0), m_successfulReconnects(0)
 {
+    // ###BUG 没有将整数转换成字符串，进行相加
     LOG_INFO("Creating enhanced connection [" + m_connectionId + "] to " +
              m_user + "@" + m_host + ":" + std::to_string(m_port) + "/" + m_database +
-             ", reconnect config: interval=" + m_reconnectInterval +
-             "ms, attempts=" + m_reconnectAttempts);
+             ", reconnect config: interval=" + std::to_string(m_reconnectInterval) +
+             "ms, attempts=" + std::to_string(m_reconnectAttempts));
     // 初始化连接对象
     init();
 }
@@ -32,9 +33,10 @@ Connection::~Connection()
 {
     close();
     m_connected = false;
+    // ###BUG 同样，整数没有转换成字符串进行相加
     LOG_INFO("Destroying connection object [" + m_connectionId + "], reconnect stats: " +
-             "totalReconnectAttempts=" + m_totalReconnectAttempts +
-             ", successful=" + m_successfulReconnects);
+             "totalReconnectAttempts=" + std::to_string(m_totalReconnectAttempts) +
+             ", successful=" + std::to_string(m_successfulReconnects));
 }
 
 // =============================
@@ -103,8 +105,8 @@ void Connection::init()
 bool Connection::connect()
 {
     // 加锁
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     if (m_connected)
     {
@@ -140,10 +142,12 @@ bool Connection::connect()
     // 如果失败，需要日志输出错误信息
     if (result == nullptr)
     {
-        std::string error = getLastError();
-        unsigned int errorCode = getLastErrorCode();
+        // ### BUG getLastError和getLastErrorCode已经注释掉了，应该直接使用API
+        std::string error = mysql_error(m_mysql);
+        unsigned int errorCode = mysql_errno(m_mysql);
+        // ###BUG 又是没有进行整数到字符串的转换
         LOG_ERROR("Failed to connect to MySQL Server: [" + m_connectionId + "]: " + error +
-                  ", errorCode=" + errorCode);
+                  ", errorCode=" + std::to_string(errorCode));
         lock.unlock();
         return false;
     }
@@ -168,8 +172,8 @@ bool Connection::connect()
 bool Connection::reconnect()
 {
     // ### BUG 又忘记线程安全的事情了
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     LOG_INFO("Connection object begin to attempt to reconnect [" + m_connectionId + "]");
     // ### 这里忘记了，先关闭当前的连接
@@ -254,8 +258,8 @@ bool Connection::reconnect()
  */
 void Connection::close()
 {
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     if (m_mysql)
     {
@@ -274,8 +278,8 @@ void Connection::close()
  */
 bool Connection::isValid(bool tryReconnect)
 {
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
     // 因为是在建立连接的前提下，检测当前的连接是否有效，因此进行是否初始化判断和是有已经连接的判断
     if (!m_mysql)
@@ -332,7 +336,7 @@ QueryResultPtr Connection::executeQuery(const std::string &sql)
 unsigned long long Connection::executeUpdate(const std::string &sql)
 {
     // QueryResultPtr result = executeInternal(sql, false);
-    QueryResult result = executeWithReconnect(sql, false);
+    QueryResultPtr result = executeWithReconnect(sql, false);
     return result ? result->getAffectedRows() : 0;
 }
 
@@ -350,8 +354,8 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
     //     throw std::runtime_error("Connection not established [" + m_connectionId + "]");
     // }
 
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     if (!m_mysql || !m_connected)
     {
         throw db::SQLExecutionError("Connection not established", CR_SERVER_GONE_ERROR);
@@ -388,7 +392,7 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
             unsigned int errorCode = mysql_errno(m_mysql);
             std::string error = mysql_error(m_mysql);
             LOG_ERROR("Failed to store query result [" + m_connectionId + "]: " + error);
-            throw db::SQLExecutionError("Failed to store query result [" + m_connectionId + "]: " + error);
+            throw db::SQLExecutionError("Failed to store query result [" + m_connectionId + "]: " + error, errorCode);
         }
 
         return std::make_shared<QueryResult>(result);
@@ -401,11 +405,11 @@ QueryResultPtr Connection::executeInternal(const std::string &sql, bool isQuery)
     }
 }
 
-QueryResult Connection::executeWithReconnect(const std::string &sql, bool isQuery)
+QueryResultPtr Connection::executeWithReconnect(const std::string &sql, bool isQuery)
 {
     // 加锁，保证多线程安全
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 日志记录
     LOG_DEBUG("trying to execute " + std::string(isQuery ? "query" : "update") + "[" + m_connectionId + "]");
     unsigned int errorCode = 0; // 准备好错误码
@@ -421,13 +425,17 @@ QueryResult Connection::executeWithReconnect(const std::string &sql, bool isQuer
                         "execution after reconnection, attempt " + std::to_string(attempt) +
                         " [" + m_connectionId + "]");
             // 开始重连
-            if (!reconnect())
+            // ###BUG 发生死锁
+            lock.unlock();
+            bool reconnected = reconnect();
+            lock.lock();
+            if (!reconnected)
             {
                 // 如果重连失败，设置错误码和错误信息，然后继续下一次尝试进行重连
                 errorCode = CR_SERVER_GONE_ERROR;
                 errorMsg = "Failed to reconnect";
 
-                LOG_WARNING("Failed to reconnect for " + std::string(isQuery ? "query" : "update" + " execution [" + m_connectionId + "]: " + errorMsg));
+                LOG_WARNING("Failed to reconnect for " + std::string(isQuery ? "query" : "update") + " execution [" + m_connectionId + "]: " + errorMsg);
                 continue;
             }
         }
@@ -435,7 +443,10 @@ QueryResult Connection::executeWithReconnect(const std::string &sql, bool isQuer
         try
         {
             // 调用executeInternal真正执行SQL语句
+            // ###BUG 这里发生死锁
+            lock.unlock();
             auto result = executeInternal(sql, isQuery);
+            lock.lock();
             // 更新最新的活动时间
             updateLastActiveTime();
             return result;
@@ -480,7 +491,7 @@ QueryResult Connection::executeWithReconnect(const std::string &sql, bool isQuer
 {
     // 加锁，保证多线程安全
     // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if (!m_mysql || !m_connected)
     {
@@ -510,16 +521,20 @@ bool Connection::beginTransaction()
 {
     // ###BUG 这里没有考虑很清楚，executeWithReconnect函数体中首先就是加锁，我当前使用的是递归锁，也就是可重入锁，所以没有什么问题
     // 但是需要加锁的临界区就是executeWithReconnect这一个函数，所以从性能角度来看，不需要加锁的
-    // std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     LOG_DEBUG("Begin transaction [" + m_connectionId + "]");
     // 在try-catch中执行executeWithReconnect函数
     try
     {
         // 执行成功
-        auto result = executeWithReconnect("START TRANSACTION", false);
+        // ### BUG 执行事务不应该使用重连
+        // ### BUG 死锁
+        lock.unlock();
+        auto result = executeInternal("START TRANSACTION", false);
+        lock.lock();
         // 对于返回的结果应该转为void，防止编译器警告
-        (void)reuslt;
+        (void)result;
         updateLastActiveTime();
 
         return true;
@@ -539,7 +554,7 @@ bool Connection::beginTransaction()
 {
     // 加锁
     // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if (!m_mysql || !m_connected)
     {
@@ -565,14 +580,16 @@ bool Connection::beginTransaction()
 
 bool Connection::commit()
 {
-    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     LOG_DEBUG("Commit transaction [" + m_connectionId + "]");
 
     // 执行带reconnect的操作
     try
     {
         // 成功
-        auto result = executeWithReconnect("COMMIT", false);
+        lock.unlock();
+        auto result = executeInternal("COMMIT", false);
+        lock.lock();
         (void)result;
 
         updateLastActiveTime();
@@ -592,7 +609,7 @@ bool Connection::commit()
 {
     // 加锁
     // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     // 判断连接是否建立
     if (!m_mysql || !m_connected)
     {
@@ -616,12 +633,14 @@ bool Connection::commit()
 
 bool Connection::rollback()
 {
-    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     LOG_DEBUG("Roll back transaction [" + m_connectionId + "]");
 
     try
     {
-        auto result = executeWithReconnect("ROLLBACK TRANSACTION", false);
+        lock.unlock();
+        auto result = executeInternal("ROLLBACK TRANSACTION", false);
+        lock.lock();
         (void)result;
 
         updateLastActiveTime();
@@ -669,7 +688,8 @@ bool Connection::rollback()
     return mysql_errno(m_mysql);
 } */
 
-bool Connection::isConnectionError(unsigned int errorCode)
+// ##BUG const成员函数不要忘记定义的时候也要写const
+bool Connection::isConnectionError(unsigned int errorCode) const
 {
     // MySQL连接相关错误代码
     switch (errorCode)
@@ -753,8 +773,8 @@ int64_t Connection::getCreationTime() const
 // ### BUG 我需要加锁锁定此时的最新活动时间
 int64_t Connection::getLastActiveTime() const
 {
-    // std::unique_lock<std::mutex> lock(m_mutex);
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+    // std::unique_lock<std::recursive_mutex> lock(m_mutex);
     return m_lastActiveTime;
 }
 
@@ -779,19 +799,19 @@ std::string Connection::getConnectionId() const
 unsigned int Connection::getTotalReconnectAttempts() const
 {
     // 加锁，返回重连总的次数
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     return m_totalReconnectAttempts;
 }
 
 unsigned int Connection::getSuccessfulReconnects() const
 {
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     return m_successfulReconnects;
 }
 
 void Connection::resetReconnectStatus()
 {
-    std::unique_lock<std::recursive_mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     m_totalReconnectAttempts = 0;
     m_successfulReconnects = 0;
     LOG_DEBUG("Reconnection statistics reset [" + m_connectionId + "]");
@@ -801,7 +821,8 @@ unsigned int Connection::calculateReconnectDelay(unsigned int attempt) const
     // 根据指数退避算法计算标准延迟时间
     unsigned int baseDelay = m_reconnectInterval;   // 延迟时间的根
     // 标准延迟时间不能无限大，因此需要有上限
-    static const maxDelay = 30000;  // 30秒是最长延迟时间
+    // ###BUG 写了static const，不要忘记写unsigned int
+    static const unsigned int maxDelay = 30000;  // 30秒是最长延迟时间
     unsigned int standardDelay = baseDelay * (1 << (attempt - 1));  // 0就是2^0; 1就是2^1
     standardDelay = std::min(maxDelay, standardDelay);  // 说明最大就是30秒
 

@@ -190,13 +190,13 @@ public:
      * @brief 获取上次操作的错误信息
      * @return 错误信息字符串
      */
-    std::string getLastError() const;
+    // std::string getLastError() const;
 
     /**
      * @brief 获取上次操作的错误代码
      * @return MySQL错误代码
      */
-    unsigned int getLastErrorCode() const;
+    // unsigned int getLastErrorCode() const;
 
     // day3 新增方法，为什么要将上面的得到错误信息和错误码进行注释呢？我认为不应该注释掉
     /**
@@ -291,7 +291,7 @@ private:
      * 2. 智能重连机制
      * 3. 重连逻辑
      */
-    QueryResult executeWithReconnect(const std::string &sql, bool isQuery);
+    QueryResultPtr executeWithReconnect(const std::string &sql, bool isQuery);
 
     /**
      * @brief 执行SQL语句的内部方法 ### 疑问：这是什么意思，什么SQL语句的内部方法
@@ -321,7 +321,8 @@ private:
     std::string m_connectionId;         // 连接唯一标识符
     int64_t m_creationTime;             // 连接创建时间
     mutable int64_t m_lastActiveTime;   // 连接最后活动时间
-    mutable std::recursive_mutex m_mutex;         // 互斥锁，保证线程安全
+    // mutable std::recursive_mutex m_mutex;         // 互斥锁，保证线程安全
+    mutable std::mutex m_mutex;
     bool m_connected;                   // 是否已经建立连接
     
     // =============================

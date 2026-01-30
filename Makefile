@@ -10,4 +10,5 @@ rebuild: clean all
 
 run: all
 	# ./bin/test_connection_pool
-	./bin/test_day2_connection
+	# ./bin/test_day2_connection
+	./bin/test_day3_connection

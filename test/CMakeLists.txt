@@ -35,4 +35,6 @@ endfunction()
 
 # 只要添加测试函数，就可以轻松地添加新的测试
 add_pool_test(test_connection_pool test_basic1.cpp)
-add_pool_test(test_day2_connection test_day2_connection.cpp)
+# 因为注释了getLastError和getLastErrorCode，所以第二天的测试应该取消
+# add_pool_test(test_day2_connection test_day2_connection.cpp)
+add_pool_test(test_day3_connection test_day3_connection.cpp)
