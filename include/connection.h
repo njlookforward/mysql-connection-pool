@@ -269,6 +269,14 @@ public:
      */
     void resetReconnectStatus();
 
+    /**
+     * @brief 得到数据库连接句柄
+     * @note 这是新添加的接口
+     */
+    MYSQL * getMysqlHandle() {
+        return m_mysql;
+    }
+
 private:
     // =============================
     // 私有方法
