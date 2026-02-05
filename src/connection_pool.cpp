@@ -72,7 +72,7 @@ void ConnectionPool::init(const PoolConfig &config) {
           createdConnections++;
         }
       } catch (const std::exception &e) {
-        LOG_ERROR("Failed to create initial connection " + std::string(i + 1) +
+        LOG_ERROR("Failed to create initial connection " + std::to_string(i + 1) +
                   ": " + e.what());
         // 继续创建其他连接，不因为一个失败而整体失败
       }
@@ -86,7 +86,7 @@ void ConnectionPool::init(const PoolConfig &config) {
     if (createdConnections < m_config.minConnections) {
       LOG_WARNING("Created " + std::to_string(createdConnections) +
                   "connections, less than minimum required(" +
-                  std::to_string(m_config.minConnections))
+                  std::to_string(m_config.minConnections));
     }
 
     LOG_INFO("Successful created " + std::to_string(m_totalConnections) +
@@ -417,8 +417,8 @@ ConnectionPtr ConnectionPool::createConnection() {
     // 建立数据库连接
     if (!conn->connect()) {
       std::string error =
-          std::string("Failed to establish database connection: " +
-                      mysql_error(conn->getMysqlHandle()));
+          std::string("Failed to establish database connection: ") +
+                      mysql_error(conn->getMysqlHandle());
       LOG_ERROR(error);
       throw std::runtime_error(error);
     }
